@@ -22,9 +22,9 @@ const MAX_HISTORY_LIMIT = 500;
 /** Turns shown in the detail pane. Only the selected session is read. */
 const PREVIEW_TURNS = 10;
 
-/** Hoisted so every row shares one identity instead of allocating a fresh empty array. */
-const NO_MESSAGES: readonly TranscriptMessage[] = [];
-const NO_SIBLINGS: readonly SessionItem[] = [];
+/** Frozen and shared: every non-selected row passes the same empty array instead of allocating one. */
+const NO_MESSAGES: readonly TranscriptMessage[] = Object.freeze([]);
+const NO_SIBLINGS: readonly SessionItem[] = Object.freeze([]);
 
 interface Preferences {
   readonly terminalApp?: TerminalApp;
@@ -197,48 +197,43 @@ export default function Command() {
     return data;
   }, [data, filter]);
 
+  const liveCount = useMemo(() => data.filter((item) => item.live !== null).length, [data]);
+
   /**
-   * One pass over every session: its display group, the live count, and unreachable rows grouped
-   * by directory. Rendering used to re-derive the group per section, so `isUnreachable` ran once
-   * per item per section.
+   * Unreachable rows grouped by directory, so one action can bring a whole project back.
+   * The arrays are built here and never mutated afterwards; the push is a local accumulator that
+   * keeps this O(n) instead of copying the bucket per item.
    */
-  const { groupByKey, unreachableByCwd, liveCount } = useMemo(() => {
-    const groups = new Map<string, SessionGroup>();
+  const unreachableByCwd = useMemo(() => {
     const byCwd = new Map<string, SessionItem[]>();
-    let live = 0;
-
     for (const item of data) {
-      if (item.live !== null) {
-        live += 1;
+      if (!isUnreachable(item, openRoots)) {
+        continue;
       }
-      const group: SessionGroup = isUnreachable(item, openRoots) ? "unreachable" : item.state;
-      groups.set(item.key, group);
-      if (group === "unreachable") {
-        const bucket = byCwd.get(item.cwd);
-        if (bucket === undefined) {
-          byCwd.set(item.cwd, [item]);
-        } else {
-          bucket.push(item);
-        }
-      }
-    }
-
-    return { groupByKey: groups, unreachableByCwd: byCwd, liveCount: live };
-  }, [data, openRoots]);
-
-  const sections = useMemo(() => {
-    const map = new Map<SessionGroup, SessionItem[]>();
-    for (const item of visible) {
-      const group = groupByKey.get(item.key) ?? item.state;
-      const bucket = map.get(group);
+      const bucket = byCwd.get(item.cwd);
       if (bucket === undefined) {
-        map.set(group, [item]);
+        byCwd.set(item.cwd, [item]);
       } else {
         bucket.push(item);
       }
     }
-    return map;
-  }, [visible, groupByKey]);
+    return byCwd;
+  }, [data, openRoots]);
+
+  /** Rows bucketed by the section they render in, in one pass over what the filter left. */
+  const sections = useMemo(() => {
+    const bySection = new Map<SessionGroup, SessionItem[]>();
+    for (const item of visible) {
+      const group: SessionGroup = isUnreachable(item, openRoots) ? "unreachable" : item.state;
+      const bucket = bySection.get(group);
+      if (bucket === undefined) {
+        bySection.set(group, [item]);
+      } else {
+        bucket.push(item);
+      }
+    }
+    return bySection;
+  }, [visible, openRoots]);
 
   const selectedPath = useMemo(
     () => data.find((item) => item.key === selectedKey)?.transcript?.path ?? "",
@@ -247,7 +242,7 @@ export default function Command() {
 
   const { data: messages, isLoading: isLoadingMessages } = useCachedPromise(loadMessages, [selectedPath], {
     keepPreviousData: false,
-    initialData: NO_MESSAGES as TranscriptMessage[],
+    initialData: [] as TranscriptMessage[],
     execute: showDetail && selectedPath.length > 0,
   });
 
@@ -285,7 +280,7 @@ export default function Command() {
       />
       {SECTION_ORDER.map((group) => {
         const items = sections.get(group);
-        if (items === undefined || items.length === 0) {
+        if (items === undefined) {
           return null;
         }
         return (

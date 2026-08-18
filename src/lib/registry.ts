@@ -30,8 +30,18 @@ export interface LiveSession {
 
 const PID_FILE = /^(\d+)\.json$/;
 
-/** A pid's host never changes, so the `ps` snapshot is only taken when an unseen pid shows up. */
+/**
+ * A live process keeps its host for as long as it runs, so the `ps` snapshot is only taken when an
+ * unseen pid shows up. Entries are dropped as soon as their pid leaves the registry.
+ */
 const hostCache = new Map<number, HostInfo>();
+
+/** Cached for a pid `ps` did not list, so a vanishing process cannot force a spawn every poll. */
+const UNRESOLVED_HOST: HostInfo = { kind: "unknown", appName: "", hostPid: 0, tty: "" };
+
+/** When `ps` itself fails the table comes back empty; retrying it every 3s would be pointless. */
+const TABLE_FAILURE_COOLDOWN_MS = 30_000;
+let tableFailedAt = 0;
 
 async function resolveHosts(pids: readonly number[]): Promise<Map<number, HostInfo>> {
   const wanted = new Set(pids);
@@ -41,19 +51,19 @@ async function resolveHosts(pids: readonly number[]): Promise<Map<number, HostIn
     }
   }
 
-  if (pids.every((pid) => hostCache.has(pid))) {
+  const missing = pids.filter((pid) => !hostCache.has(pid));
+  if (missing.length === 0 || Date.now() - tableFailedAt < TABLE_FAILURE_COOLDOWN_MS) {
     return hostCache;
   }
 
   const table = await readProcessTable();
-  for (const pid of pids) {
-    if (hostCache.has(pid)) {
-      continue;
-    }
-    const host = detectHost(pid, table);
-    if (host !== null) {
-      hostCache.set(pid, host);
-    }
+  if (table.size === 0) {
+    tableFailedAt = Date.now();
+    return hostCache;
+  }
+
+  for (const pid of missing) {
+    hostCache.set(pid, detectHost(pid, table) ?? UNRESOLVED_HOST);
   }
   return hostCache;
 }
@@ -136,24 +146,24 @@ export async function readLiveSessions(): Promise<LiveSession[]> {
     .map((entry) => ({ name: entry.name, pid: Number.parseInt(entry.match[1], 10) }))
     .filter((entry) => isAlive(entry.pid));
 
-  const [hosts, sessions] = await Promise.all([
-    resolveHosts(candidates.map((candidate) => candidate.pid)),
-    Promise.all(
-      candidates.map(async ({ name, pid }) => {
-        try {
-          return parseRegistryFile(await readFile(join(REGISTRY_DIR, name), "utf8"), pid);
-        } catch (error) {
-          if (isMissingOrDenied(error)) {
-            return null;
-          }
-          throw error;
+  const parsed = await Promise.all(
+    candidates.map(async ({ name, pid }) => {
+      try {
+        return parseRegistryFile(await readFile(join(REGISTRY_DIR, name), "utf8"), pid);
+      } catch (error) {
+        if (isMissingOrDenied(error)) {
+          return null;
         }
-      }),
-    ),
-  ]);
+        throw error;
+      }
+    }),
+  );
+
+  const sessions = parsed.filter((session): session is LiveSession => session !== null);
+  // Keyed on the pid inside the file, which `parseRegistryFile` prefers over the filename.
+  const hosts = await resolveHosts(sessions.map((session) => session.pid));
 
   return sessions
-    .filter((session): session is LiveSession => session !== null)
     .map((session) => {
       const host = hosts.get(session.pid);
       const withHost =

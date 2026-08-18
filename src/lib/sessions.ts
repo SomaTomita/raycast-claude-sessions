@@ -89,6 +89,26 @@ function build(sessionId: string, live: LiveSession | null, context: SessionCont
   };
 }
 
+/**
+ * Every field of a live session that the list renders or sorts by. `statusUpdatedAt` matters most:
+ * reusing a row whose status happens to match would otherwise freeze its last-activity stamp, and
+ * `byActivityDesc` would sort a continuously busy session below one that merely changed state.
+ */
+function sameLiveSession(a: LiveSession, b: LiveSession): boolean {
+  return (
+    a.pid === b.pid &&
+    a.sessionId === b.sessionId &&
+    a.status === b.status &&
+    a.waitingFor === b.waitingFor &&
+    a.statusUpdatedAt === b.statusUpdatedAt &&
+    a.name === b.name &&
+    a.cwd === b.cwd &&
+    a.tty === b.tty &&
+    a.hostApp === b.hostApp &&
+    a.hostPid === b.hostPid
+  );
+}
+
 function byActivityDesc(a: SessionItem, b: SessionItem): number {
   return b.lastActivityMs - a.lastActivityMs;
 }
@@ -158,33 +178,32 @@ export async function loadSessions(historyLimit: number, claudeBin?: string): Pr
  * without rescanning transcripts. Unchanged rows keep their object identity.
  */
 export function applyLiveSessions(items: readonly SessionItem[], live: readonly LiveSession[]): SessionItem[] {
-  // One pass: transcript context per session, and the previous row per pid for identity reuse.
-  const contexts = new Map<string, SessionContext>();
-  const itemsByPid = new Map<number, SessionItem>();
+  // One pass: the previous row per session (for transcript context) and per pid (for identity reuse).
+  // Contexts are derived lazily below, so a 500 row history does not allocate 500 throwaway objects.
+  const previousBySession = new Map<string, SessionItem>();
+  const previousByPid = new Map<number, SessionItem>();
   for (const item of items) {
-    if (!contexts.has(item.sessionId)) {
-      contexts.set(item.sessionId, contextOf(item));
+    if (!previousBySession.has(item.sessionId)) {
+      previousBySession.set(item.sessionId, item);
     }
     if (item.live !== null) {
-      itemsByPid.set(item.live.pid, item);
+      previousByPid.set(item.live.pid, item);
     }
   }
 
   const liveIds = new Set(live.map((session) => session.sessionId));
 
   const liveItems = live.map((session) => {
-    const previous = itemsByPid.get(session.pid);
-    const unchanged =
-      previous?.live?.status === session.status &&
-      previous?.live?.waitingFor === session.waitingFor &&
-      previous?.sessionId === session.sessionId
-        ? previous
-        : undefined;
-    if (unchanged !== undefined) {
-      return unchanged;
+    const previous = previousByPid.get(session.pid);
+    if (previous !== undefined && previous.live !== null && sameLiveSession(previous.live, session)) {
+      return previous;
     }
-    const context = contexts.get(session.sessionId) ?? { transcript: null, lastPrompt: null, agent: null };
-    return build(session.sessionId, session, { ...context, agent: null });
+    const source = previousBySession.get(session.sessionId);
+    const context: SessionContext =
+      source === undefined
+        ? { transcript: null, lastPrompt: null, agent: null }
+        : { transcript: source.transcript, lastPrompt: source.lastPrompt, agent: null };
+    return build(session.sessionId, session, context);
   });
 
   // Sessions whose process disappeared fall back to a single history row; background rows pass through.

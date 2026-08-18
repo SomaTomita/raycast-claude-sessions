@@ -39,7 +39,7 @@ const HOST_KINDS: Record<string, HostKind> = {
 const BARE_TERMINALS = /^(alacritty|ghostty|kitty|wezterm(-gui)?)$/i;
 
 const MAX_CHAIN_DEPTH = 16;
-/** Hoisted: this splits every line of a ~1000 row process table. */
+/** Shared, not for speed: `split` clones the pattern per call anyway. It documents the format once. */
 const COLUMN_SEPARATOR = /\s+/;
 
 /** Snapshot of the process table, keyed by pid. One `ps` call serves every session. */
@@ -104,15 +104,4 @@ export function detectHost(pid: number, table: Map<number, ProcessRow>): HostInf
   }
 
   return { kind: "unknown", appName: "", hostPid: 0, tty };
-}
-
-export async function isAppRunning(processName: string): Promise<boolean> {
-  const table = await readProcessTable();
-  const target = processName.toLowerCase();
-  for (const row of table.values()) {
-    if (basename(row.command).toLowerCase() === target || appNameOf(row.command).toLowerCase() === target) {
-      return true;
-    }
-  }
-  return false;
 }

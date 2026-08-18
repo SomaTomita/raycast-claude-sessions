@@ -59,7 +59,7 @@ export function SessionActions({
         const pid = target.live?.pid;
         if (pid !== undefined) {
           try {
-            quitProcess(pid);
+            await quitProcess(pid, target.live?.startedAt ?? null);
           } catch (error) {
             await showFailureToast(error, { title: `Could not quit pid ${pid}` });
             return;
@@ -133,7 +133,7 @@ export function SessionActions({
       return;
     }
     try {
-      quitProcess(live.pid);
+      await quitProcess(live.pid, live.startedAt);
       await showToast({ style: Toast.Style.Success, title: `Quit pid ${live.pid}`, message: live.name });
       onRefresh();
     } catch (error) {
