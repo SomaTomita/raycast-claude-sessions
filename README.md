@@ -18,8 +18,10 @@ Everything is read-only, straight off disk. No API, no credentials, no hooks, no
 | `~/.claude/sessions/<pid>.json` | Live registry written by Claude Code itself: `status` (`busy` / `idle` / `shell`), pid, cwd, session name, CLI version. Entries whose process is dead are dropped. |
 | `~/.claude/projects/<project>/<sessionId>.jsonl` | Transcript history: AI-generated title, first prompt, git branch, model, message count, last activity. |
 | `~/.claude/history.jsonl` | Most recent prompt per session (tail-read). |
+| `claude agents --all --json` | The CLI's own view: `waiting` status with its reason (e.g. "permission prompt"), plus **background agents**, which have no process and are invisible on disk. Costs ~1s, so it is cached for 45s and refreshed on ⌘R. |
 
-`CLAUDE_CONFIG_DIR` is honoured when set.
+`CLAUDE_CONFIG_DIR` is honoured when set. The `claude` binary is resolved from the usual install
+paths and a login-shell lookup, because Raycast processes inherit a minimal PATH.
 
 ## Status
 
@@ -28,6 +30,8 @@ Everything is read-only, straight off disk. No API, no credentials, no hooks, no
 - **Running · window gone** — the process is alive but no editor window shows its directory any more, so its
   terminal tab is gone and nothing can reach it. Resuming such a session offers to quit the stale process first,
   so one transcript never has two writers.
+- **Background agents** — started with `claude --bg`, `state` is `blocked` or `done`. No pid, so they
+  cannot be jumped to; the row carries a ready-made `claude attach <id>`.
 - **History** — no live process owns the session; only the transcript remains.
 
 One row per *process*, not per session: the same session opened in two terminals shows up twice, each with its
@@ -49,8 +53,12 @@ then does the most precise thing available:
 | iTerm2 | Selects the exact tab whose `tty` matches the Claude process. Verified against a running session. |
 | Terminal.app | Same approach via Terminal's `tty` property on tabs. |
 | Zed / VS Code / Cursor | Raises the window already showing that directory (matched by folder name through the accessibility API). It never opens, launches, or replaces anything. Terminal tabs inside an editor cannot be targeted: no scripting API. |
-| Anything else (Warp, Ghostty, …) | Activates the application. |
+| Anything else (Warp, Ghostty, …) | Activates the exact hosting process. Any app bundle in the parent chain counts, so an unlisted terminal still works. |
 | Nothing (history, or window gone) | Resumes in the terminal application: one iTerm2 window with a tab per session. |
+
+Activation goes through `NSRunningApplication` (JXA), not `tell application "X" to activate`: it targets
+the host **pid**, so it never launches an app that has exited, tells two instances of one bundle apart, and
+switches Spaces including fullscreen.
 
 Listing an editor's windows uses `System Events`, so macOS asks once for **Accessibility permission for
 Raycast**. Without it no window is ever matched, and sessions hosted in an editor fall back to activating the app.
@@ -97,6 +105,7 @@ nothing for width (`columns` is Grid-only). So the layout is tuned within that c
 | Move to `<Editor>` | ⌘E | Raises the project window; opens a new one only when none matches. |
 | Open Transcript | ⌘↩ | Full-width conversation view. |
 | Quit Stale Process | ⌃X | On a *window gone* row: SIGTERM, transcript untouched. |
+| Copy Attach Command | | On a background agent row: `claude attach <id>`. |
 | Copy Session ID / Resume Command | ⌘. / ⌘⇧C | Plus last prompt and directory path. |
 | Open Project Folder, Show Transcript in Finder | | |
 | Toggle detail pane, Refresh | ⌘D, ⌘R | |
@@ -111,6 +120,13 @@ nothing for width (`columns` is Grid-only). So the layout is tuned within that c
 | History Limit | `80` | Transcripts scanned per full refresh, newest first (max 500). |
 
 Transcripts larger than 6 MB are sampled at head + tail, so their message count is shown as a lower bound (`180+`).
+
+## Prior art
+
+`focus-terminal` in [claude-code-launcher](https://github.com/raycast/extensions/tree/main/extensions/claude-code-launcher)
+(MIT) solves the same jump problem, and three ideas came from reading it: `claude agents --all --json` as a
+status source, pid-based activation through `NSRunningApplication`, and deriving the host application from the
+`.app` bundle path instead of a hardcoded list.
 
 ## Development
 

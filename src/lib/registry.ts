@@ -1,10 +1,11 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { agentStatusOf } from "./agents";
 import { detectHost, HostInfo, HostKind, readProcessTable } from "./host";
 import { isMissingOrDenied, REGISTRY_DIR } from "./paths";
 
-/** Status string written by Claude Code itself. Known values: "busy", "idle". */
+/** Status string written by Claude Code itself. Known values: "busy", "idle", "shell". */
 export type RegistryStatus = string;
 
 export interface LiveSession {
@@ -21,7 +22,10 @@ export interface LiveSession {
   /** Terminal or editor hosting the process, resolved from the parent chain. */
   readonly hostKind: HostKind;
   readonly hostApp: string;
+  readonly hostPid: number;
   readonly tty: string;
+  /** Reason a session is waiting, e.g. "permission prompt". From the CLI, empty otherwise. */
+  readonly waitingFor: string;
 }
 
 const PID_FILE = /^(\d+)\.json$/;
@@ -104,7 +108,9 @@ function parseRegistryFile(raw: string, filePid: number): LiveSession | null {
     statusUpdatedAt: optionalNumber(record.statusUpdatedAt) ?? optionalNumber(record.updatedAt),
     hostKind: "unknown",
     hostApp: "",
+    hostPid: 0,
     tty: "",
+    waitingFor: "",
   };
 }
 
@@ -149,9 +155,20 @@ export async function readLiveSessions(): Promise<LiveSession[]> {
     .filter((session): session is LiveSession => session !== null)
     .map((session) => {
       const host = hosts.get(session.pid);
-      return host === undefined
-        ? session
-        : { ...session, hostKind: host.kind, hostApp: host.appName, tty: host.tty };
+      const withHost =
+        host === undefined
+          ? session
+          : {
+              ...session,
+              hostKind: host.kind,
+              hostApp: host.appName,
+              hostPid: host.hostPid,
+              tty: host.tty,
+            };
+
+      // The CLI knows about `waiting` and why; the registry file only carries busy/idle/shell.
+      const fromCli = agentStatusOf(session.pid);
+      return fromCli === null ? withHost : { ...withHost, status: fromCli.status, waitingFor: fromCli.waitingFor };
     })
     .sort((a, b) => (b.statusUpdatedAt ?? 0) - (a.statusUpdatedAt ?? 0));
 }

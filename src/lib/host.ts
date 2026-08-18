@@ -7,7 +7,7 @@ export type HostKind = "iterm" | "terminal" | "editor" | "app" | "unknown";
 
 export interface HostInfo {
   readonly kind: HostKind;
-  /** macOS application name, usable with AppleScript / `open -a`. */
+  /** macOS application name, taken from the `.app` bundle when there is one. */
   readonly appName: string;
   readonly hostPid: number;
   /** tty of the Claude process itself, e.g. `/dev/ttys002`. */
@@ -17,22 +17,26 @@ export interface HostInfo {
 interface ProcessRow {
   readonly ppid: number;
   readonly tty: string;
+  /** Full executable path from `ps -o comm=`, e.g. `/Applications/Zed.app/Contents/MacOS/zed`. */
   readonly command: string;
 }
 
-const HOSTS: readonly { readonly match: RegExp; readonly kind: HostKind; readonly appName: string }[] = [
-  { match: /^iterm(2|server.*)?$/i, kind: "iterm", appName: "iTerm" },
-  { match: /^terminal$/i, kind: "terminal", appName: "Terminal" },
-  { match: /^zed$/i, kind: "editor", appName: "Zed" },
-  { match: /^(code|code helper.*|electron)$/i, kind: "editor", appName: "Visual Studio Code" },
-  { match: /^cursor.*$/i, kind: "editor", appName: "Cursor" },
-  { match: /^(warp|warpterminal)$/i, kind: "app", appName: "Warp" },
-  { match: /^ghostty$/i, kind: "app", appName: "Ghostty" },
-  { match: /^wezterm(-gui)?$/i, kind: "app", appName: "WezTerm" },
-  { match: /^kitty$/i, kind: "app", appName: "kitty" },
-  { match: /^alacritty$/i, kind: "app", appName: "Alacritty" },
-  { match: /^hyper$/i, kind: "app", appName: "Hyper" },
-];
+/**
+ * Behaviour per host, keyed by application name. Anything not listed still works: an unknown
+ * `.app` host is treated as `app`, which means activate-only. Only the apps we can drive more
+ * precisely need an entry here.
+ */
+const HOST_KINDS: Record<string, HostKind> = {
+  iTerm: "iterm",
+  Terminal: "terminal",
+  Zed: "editor",
+  "Visual Studio Code": "editor",
+  Cursor: "editor",
+  Windsurf: "editor",
+};
+
+/** Terminals commonly installed as bare binaries rather than app bundles. */
+const BARE_TERMINALS = /^(alacritty|ghostty|kitty|wezterm(-gui)?)$/i;
 
 const MAX_CHAIN_DEPTH = 16;
 
@@ -61,7 +65,22 @@ export async function readProcessTable(): Promise<Map<number, ProcessRow>> {
   return table;
 }
 
-/** Walks the parent chain until it reaches a known terminal or editor. */
+/** Application name of a process: the `.app` bundle name when present, else the binary name. */
+export function appNameOf(command: string): string {
+  const bundle = command.match(/\/([^/]+)\.app\//);
+  return bundle !== null ? bundle[1] : basename(command);
+}
+
+/**
+ * Whether a process looks like a GUI terminal or editor hosting a session: anything inside an
+ * `.app` bundle, plus bare binaries of known terminals. Broader than the list of apps we can
+ * script, on purpose, so an unrecognised host still gets activated rather than ignored.
+ */
+function isGuiHost(command: string): boolean {
+  return command.includes(".app/") || BARE_TERMINALS.test(basename(command));
+}
+
+/** Walks the parent chain until it reaches a GUI application. */
 export function detectHost(pid: number, table: Map<number, ProcessRow>): HostInfo | null {
   const self = table.get(pid);
   if (self === undefined) {
@@ -75,10 +94,9 @@ export function detectHost(pid: number, table: Map<number, ProcessRow>): HostInf
     if (row === undefined) {
       break;
     }
-    const name = basename(row.command);
-    const host = HOSTS.find((candidate) => candidate.match.test(name));
-    if (host !== undefined) {
-      return { kind: host.kind, appName: host.appName, hostPid: current, tty };
+    if (isGuiHost(row.command)) {
+      const appName = appNameOf(row.command);
+      return { kind: HOST_KINDS[appName] ?? "app", appName, hostPid: current, tty };
     }
     current = row.ppid;
   }
@@ -86,10 +104,11 @@ export function detectHost(pid: number, table: Map<number, ProcessRow>): HostInf
   return { kind: "unknown", appName: "", hostPid: 0, tty };
 }
 
-export async function isAppRunning(appName: string): Promise<boolean> {
+export async function isAppRunning(processName: string): Promise<boolean> {
   const table = await readProcessTable();
+  const target = processName.toLowerCase();
   for (const row of table.values()) {
-    if (basename(row.command).toLowerCase() === appName.toLowerCase()) {
+    if (basename(row.command).toLowerCase() === target || appNameOf(row.command).toLowerCase() === target) {
       return true;
     }
   }

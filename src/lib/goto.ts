@@ -1,4 +1,5 @@
-import { activateApp, focusItermTab, focusTerminalTab, raiseProjectWindow } from "./focus";
+import { activateProcess } from "./activate";
+import { focusItermTab, focusTerminalTab, raiseProjectWindow } from "./focus";
 import { SessionItem } from "./sessions";
 
 export interface GoToOptions {
@@ -10,6 +11,16 @@ export type GoToResult =
   | { readonly kind: "reached"; readonly title: string; readonly message: string }
   /** Nothing hosts this session any more, so the caller decides whether to resume it. */
   | { readonly kind: "needs-resume" };
+
+/** Activates the hosting application by pid, so nothing is ever launched to satisfy a jump. */
+async function activateHost(pid: number, appName: string, message: string): Promise<GoToResult> {
+  try {
+    await activateProcess(pid);
+    return { kind: "reached", title: `Activated ${appName}`, message };
+  } catch {
+    return { kind: "reached", title: `${appName} is no longer on screen`, message: "Nothing was launched" };
+  }
+}
 
 /**
  * Moves to wherever the session already lives, and never creates anything:
@@ -29,8 +40,7 @@ export async function goToSession(item: SessionItem, options: GoToOptions = {}):
     if (focused) {
       return { kind: "reached", title: `Jumped to ${live.hostApp}`, message: `${live.name} · ${live.tty}` };
     }
-    await activateApp(live.hostApp);
-    return { kind: "reached", title: `No tab on ${live.tty}`, message: `Activated ${live.hostApp}` };
+    return activateHost(live.hostPid, live.hostApp, `No tab on ${live.tty}`);
   }
 
   if (live.hostKind === "editor" && live.hostApp.length > 0) {
@@ -42,17 +52,11 @@ export async function goToSession(item: SessionItem, options: GoToOptions = {}):
         message: `${live.name} · ${live.tty || "unknown tty"}`,
       };
     }
-    await activateApp(live.hostApp);
-    return {
-      kind: "reached",
-      title: `Activated ${live.hostApp}`,
-      message: "No window shows this directory; nothing was opened",
-    };
+    return activateHost(live.hostPid, live.hostApp, "No window shows this directory; nothing was opened");
   }
 
-  if (live.hostApp.length > 0) {
-    await activateApp(live.hostApp);
-    return { kind: "reached", title: `Activated ${live.hostApp}`, message: live.name };
+  if (live.hostPid > 0) {
+    return activateHost(live.hostPid, live.hostApp.length > 0 ? live.hostApp : "the host application", live.name);
   }
 
   return { kind: "needs-resume" };

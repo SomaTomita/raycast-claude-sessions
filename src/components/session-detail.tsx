@@ -2,13 +2,14 @@ import { Color, Icon, List } from "@raycast/api";
 
 import { cleanPrompt, formatAbsolute, formatBytes, formatDuration, formatHomePath } from "../lib/format";
 import { TranscriptMessage } from "../lib/messages";
-import { SessionItem } from "../lib/sessions";
+import { SessionItem, SessionState } from "../lib/sessions";
 
-const STATE_COLOR = {
+const STATE_COLOR: Record<SessionState, Color> = {
   working: Color.Green,
   waiting: Color.Blue,
+  background: Color.Purple,
   closed: Color.SecondaryText,
-} as const;
+};
 
 /** Per-turn budget in the narrow pane. Long turns get an ellipsis rather than a wall of text. */
 const TURN_LENGTH = 260;
@@ -44,7 +45,7 @@ function markdown({ item, messages, isLoadingMessages }: Props): string {
 function hostText(item: SessionItem): string {
   const live = item.live;
   if (live === null) {
-    return "—";
+    return item.agent !== null ? `background job ${item.agent.id}` : "—";
   }
   const app = live.hostApp.length > 0 ? live.hostApp : "unknown";
   return live.tty.length > 0 ? `${app} · ${live.tty}` : app;

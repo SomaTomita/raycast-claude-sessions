@@ -43,10 +43,6 @@ end tell`);
   return result.trim() === "ok";
 }
 
-export async function activateApp(appName: string): Promise<void> {
-  await runAppleScript(`tell application ${appleQuote(appName)} to activate`);
-}
-
 /**
  * Raises the window already showing `cwd`, and only opens a new window when there is none.
  * Returns true when an existing window was reused.

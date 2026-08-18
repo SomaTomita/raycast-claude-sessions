@@ -16,6 +16,8 @@ interface Props {
   readonly claudeBin: string;
   /** Live process with no editor window left: treat it like history, and offer to clean it up. */
   readonly unreachable: boolean;
+  /** Background agent: no process to reach, managed by the CLI with `claude attach|stop|rm`. */
+  readonly background: boolean;
   /** Every other session in the same directory that cannot be reached either. */
   readonly siblings: readonly SessionItem[];
   readonly onRefresh: () => void;
@@ -32,6 +34,7 @@ export function SessionActions({
   editor,
   claudeBin,
   unreachable,
+  background,
   siblings,
   onRefresh,
   onToggleDetail,
@@ -146,6 +149,7 @@ export function SessionActions({
     }
   }
 
+  const attachCommand = item.agent !== null ? `claude attach ${item.agent.id}` : "";
   const projectGroup = [item, ...siblings];
   const goToTitle = isLive
     ? `Go to Session${item.live?.hostApp ? ` in ${item.live.hostApp}` : ""}`
@@ -154,7 +158,11 @@ export function SessionActions({
   return (
     <ActionPanel>
       <ActionPanel.Section>
-        <Action title={goToTitle} icon={isLive ? Icon.ArrowRight : Icon.Terminal} onAction={goTo} />
+        {background ? (
+          <Action.CopyToClipboard title="Copy Attach Command" icon={Icon.Terminal} content={attachCommand} />
+        ) : (
+          <Action title={goToTitle} icon={isLive ? Icon.ArrowRight : Icon.Terminal} onAction={goTo} />
+        )}
         {siblings.length > 0 ? (
           <Action
             title={`Resume All ${projectGroup.length} in ${item.project}`}

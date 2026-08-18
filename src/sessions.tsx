@@ -9,6 +9,7 @@ import { formatHomePath, projectName } from "./lib/format";
 import { readRecentMessages, TranscriptMessage } from "./lib/messages";
 import { LiveSession, readLiveSessions } from "./lib/registry";
 import { TerminalApp } from "./lib/resume";
+import { invalidateAgents } from "./lib/agents";
 import { applyLiveSessions, loadSessions, SessionItem, SessionState } from "./lib/sessions";
 import { listProjectRoots } from "./lib/windows";
 
@@ -35,10 +36,11 @@ const GROUP_META: Record<SessionGroup, { readonly section: string; readonly colo
   working: { section: "Working", color: Color.Green },
   waiting: { section: "Idle · awaiting input", color: Color.Blue },
   unreachable: { section: "Running · window gone", color: Color.Orange },
+  background: { section: "Background agents", color: Color.Purple },
   closed: { section: "History", color: Color.SecondaryText },
 };
 
-const SECTION_ORDER: readonly SessionGroup[] = ["working", "waiting", "unreachable", "closed"];
+const SECTION_ORDER: readonly SessionGroup[] = ["working", "waiting", "unreachable", "background", "closed"];
 /** Window titles change rarely, and each check is an accessibility round trip. */
 const WINDOW_REFRESH_MS = 15_000;
 
@@ -99,6 +101,12 @@ function accessories(item: SessionItem, group: SessionGroup): List.Item.Accessor
   if (group === "unreachable") {
     result.push({ tag: { value: "no window", color: Color.Orange }, tooltip: "Process alive, but no editor window" });
   }
+  if (item.live !== null && item.live.waitingFor.length > 0) {
+    result.push({ tag: { value: item.live.waitingFor, color: Color.Red }, tooltip: "Waiting for you" });
+  }
+  if (item.agent !== null) {
+    result.push({ tag: { value: item.agent.state, color: Color.Purple }, tooltip: `Background job ${item.agent.id}` });
+  }
   if (item.live !== null) {
     result.push({
       tag: { value: item.statusLabel, color: GROUP_META[group].color },
@@ -123,7 +131,7 @@ export default function Command() {
   const [filter, setFilter] = useState("all");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
-  const { data: scanned, isLoading, error, revalidate } = useCachedPromise(loadSessions, [historyLimit], {
+  const { data: scanned, isLoading, error, revalidate } = useCachedPromise(loadSessions, [historyLimit, claudeBin], {
     keepPreviousData: true,
     initialData: [] as SessionItem[],
   });
@@ -263,12 +271,14 @@ export default function Command() {
                     editor={editor}
                     claudeBin={claudeBin}
                     unreachable={group === "unreachable"}
+                    background={group === "background"}
                     siblings={
                       group === "unreachable"
                         ? (unreachableByCwd.get(item.cwd) ?? []).filter((other) => other.key !== item.key)
                         : []
                     }
                     onRefresh={() => {
+                      invalidateAgents();
                       revalidate();
                       revalidateLive();
                       revalidateWindows();

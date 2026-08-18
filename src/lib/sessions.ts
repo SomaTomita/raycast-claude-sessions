@@ -1,19 +1,22 @@
+import { Agent, BackgroundAgent, readAgents } from "./agents";
 import { cleanPrompt, projectName, shortId } from "./format";
 import { PromptEntry, readRecentPrompts } from "./prompts";
 import { LiveSession, readLiveSessions } from "./registry";
 import { indexTranscripts, summarizeAll, TranscriptSummary } from "./transcript";
 
-export type SessionState = "working" | "waiting" | "closed";
+export type SessionState = "working" | "waiting" | "background" | "closed";
 
 export interface SessionItem {
-  /** Stable list key. One row per live process, so sessionId alone is not unique. */
+  /** Stable list key. One row per live process or background job, so sessionId alone is not unique. */
   readonly key: string;
   readonly sessionId: string;
   readonly title: string;
   readonly state: SessionState;
-  /** Raw status from the registry ("busy" / "idle" / "shell" / …), or "closed" when no process owns it. */
+  /** Raw status: registry/CLI value for a process, job state for a background agent, else "closed". */
   readonly statusLabel: string;
   readonly live: LiveSession | null;
+  /** Set for a background agent: no process, managed with `claude attach|stop|rm`. */
+  readonly agent: BackgroundAgent | null;
   readonly transcript: TranscriptSummary | null;
   readonly lastPrompt: PromptEntry | null;
   readonly cwd: string;
@@ -29,48 +32,51 @@ export interface SessionItem {
 interface SessionContext {
   readonly transcript: TranscriptSummary | null;
   readonly lastPrompt: PromptEntry | null;
+  readonly agent: BackgroundAgent | null;
 }
 
-function stateOf(live: LiveSession | null): SessionState {
-  if (live === null) {
-    return "closed";
+function stateOf(live: LiveSession | null, agent: BackgroundAgent | null): SessionState {
+  if (live !== null) {
+    return live.status === "idle" ? "waiting" : "working";
   }
-  return live.status === "idle" ? "waiting" : "working";
+  return agent !== null ? "background" : "closed";
 }
 
-function titleOf(transcript: TranscriptSummary | null, live: LiveSession | null, sessionId: string): string {
-  const aiTitle = transcript?.aiTitle.trim() ?? "";
+function titleOf(context: SessionContext, live: LiveSession | null, sessionId: string): string {
+  const aiTitle = context.transcript?.aiTitle.trim() ?? "";
   if (aiTitle.length > 0) {
     return aiTitle;
   }
-  const prompt = cleanPrompt(transcript?.firstPrompt ?? "", 90);
+  const prompt = cleanPrompt(context.transcript?.firstPrompt ?? "", 90);
   if (prompt.length > 0) {
     return prompt;
   }
-  if (live !== null && live.name.length > 0) {
-    return live.name;
-  }
-  return shortId(sessionId);
+  const name = live?.name ?? context.agent?.name ?? "";
+  return name.length > 0 ? name : shortId(sessionId);
 }
 
 function build(sessionId: string, live: LiveSession | null, context: SessionContext): SessionItem {
-  const { transcript, lastPrompt } = context;
-  const liveCwd = live?.cwd ?? "";
-  const cwd = liveCwd.length > 0 ? liveCwd : (transcript?.cwd ?? lastPrompt?.project ?? "");
+  const { transcript, lastPrompt, agent } = context;
+  const declaredCwd = live?.cwd ?? agent?.cwd ?? "";
+  const cwd = declaredCwd.length > 0 ? declaredCwd : (transcript?.cwd ?? lastPrompt?.project ?? "");
   const lastActivityMs = Math.max(
     transcript?.lastTimestampMs ?? 0,
     transcript?.mtimeMs ?? 0,
     live?.statusUpdatedAt ?? 0,
     lastPrompt?.timestampMs ?? 0,
+    agent?.startedAt ?? 0,
   );
 
+  const key = live !== null ? `pid-${live.pid}` : agent !== null ? `job-${agent.id}` : `session-${sessionId}`;
+
   return {
-    key: live !== null ? `pid-${live.pid}` : `session-${sessionId}`,
+    key,
     sessionId,
-    title: titleOf(transcript, live, sessionId),
-    state: stateOf(live),
-    statusLabel: live?.status ?? "closed",
+    title: titleOf(context, live, sessionId),
+    state: stateOf(live, agent),
+    statusLabel: live?.status ?? agent?.state ?? "closed",
     live,
+    agent,
     transcript,
     lastPrompt,
     cwd,
@@ -88,22 +94,33 @@ function byActivityDesc(a: SessionItem, b: SessionItem): number {
 }
 
 function contextOf(item: SessionItem): SessionContext {
-  return { transcript: item.transcript, lastPrompt: item.lastPrompt };
+  return { transcript: item.transcript, lastPrompt: item.lastPrompt, agent: item.agent };
+}
+
+/** The CLI is optional: a missing or failing binary must not break the session list. */
+async function loadAgents(claudeBin?: string): Promise<Agent[]> {
+  try {
+    return await readAgents(claudeBin);
+  } catch {
+    return [];
+  }
 }
 
 /**
- * Live processes (from the registry) plus the newest `historyLimit` transcripts,
+ * Live processes (registry), background agents (CLI), and the newest `historyLimit` transcripts,
  * sorted newest activity first. A session opened in two terminals yields two rows.
  */
-export async function loadSessions(historyLimit: number): Promise<SessionItem[]> {
+export async function loadSessions(historyLimit: number, claudeBin?: string): Promise<SessionItem[]> {
+  // Agents first: reading them fills the pid status cache that readLiveSessions merges in.
+  const agents = await loadAgents(claudeBin);
   const [live, index, prompts] = await Promise.all([readLiveSessions(), indexTranscripts(), readRecentPrompts()]);
 
   const filesById = new Map(index.map((file) => [file.sessionId, file]));
 
-  // Always summarise live sessions, even when their transcript fell outside the recency window.
+  // Always summarise live and background sessions, even when their transcript is outside the window.
   const targets = new Map(index.slice(0, Math.max(1, historyLimit)).map((file) => [file.path, file]));
-  for (const session of live) {
-    const file = filesById.get(session.sessionId);
+  for (const sessionId of [...live.map((session) => session.sessionId), ...agents.map((agent) => agent.sessionId)]) {
+    const file = filesById.get(sessionId);
     if (file !== undefined) {
       targets.set(file.path, file);
     }
@@ -112,18 +129,28 @@ export async function loadSessions(historyLimit: number): Promise<SessionItem[]>
   const summaries = await summarizeAll([...targets.values()]);
   const summaryById = new Map(summaries.map((summary) => [summary.sessionId, summary]));
 
-  const contextFor = (sessionId: string): SessionContext => ({
+  const contextFor = (sessionId: string, agent: BackgroundAgent | null = null): SessionContext => ({
     transcript: summaryById.get(sessionId) ?? null,
     lastPrompt: prompts.get(sessionId) ?? null,
+    agent,
   });
 
   const liveIds = new Set(live.map((session) => session.sessionId));
   const liveItems = live.map((session) => build(session.sessionId, session, contextFor(session.sessionId)));
+
+  const backgroundAgents = agents.filter(
+    (agent): agent is BackgroundAgent => agent.kind === "background" && !liveIds.has(agent.sessionId),
+  );
+  const backgroundIds = new Set(backgroundAgents.map((agent) => agent.sessionId));
+  const backgroundItems = backgroundAgents.map((agent) =>
+    build(agent.sessionId, null, contextFor(agent.sessionId, agent)),
+  );
+
   const closedItems = summaries
-    .filter((summary) => !liveIds.has(summary.sessionId))
+    .filter((summary) => !liveIds.has(summary.sessionId) && !backgroundIds.has(summary.sessionId))
     .map((summary) => build(summary.sessionId, null, contextFor(summary.sessionId)));
 
-  return [...liveItems, ...closedItems].sort(byActivityDesc);
+  return [...liveItems, ...backgroundItems, ...closedItems].sort(byActivityDesc);
 }
 
 /**
@@ -141,22 +168,27 @@ export function applyLiveSessions(items: readonly SessionItem[], live: readonly 
   const liveIds = new Set(live.map((session) => session.sessionId));
   const liveItems = live.map((session) => {
     const unchanged = items.find(
-      (item) => item.live !== null && item.live.pid === session.pid && item.live.status === session.status,
+      (item) =>
+        item.live !== null &&
+        item.live.pid === session.pid &&
+        item.live.status === session.status &&
+        item.live.waitingFor === session.waitingFor,
     );
     if (unchanged !== undefined && unchanged.sessionId === session.sessionId) {
       return unchanged;
     }
-    return build(session.sessionId, session, contexts.get(session.sessionId) ?? { transcript: null, lastPrompt: null });
+    const context = contexts.get(session.sessionId) ?? { transcript: null, lastPrompt: null, agent: null };
+    return build(session.sessionId, session, { ...context, agent: null });
   });
 
-  // Sessions whose process disappeared fall back to a single history row.
-  const closedById = new Map<string, SessionItem>();
+  // Sessions whose process disappeared fall back to a single history row; background rows pass through.
+  const restById = new Map<string, SessionItem>();
   for (const item of items) {
-    if (liveIds.has(item.sessionId) || closedById.has(item.sessionId)) {
+    if (liveIds.has(item.sessionId) || restById.has(item.sessionId)) {
       continue;
     }
-    closedById.set(item.sessionId, item.live === null ? item : build(item.sessionId, null, contextOf(item)));
+    restById.set(item.sessionId, item.live === null ? item : build(item.sessionId, null, contextOf(item)));
   }
 
-  return [...liveItems, ...closedById.values()].sort(byActivityDesc);
+  return [...liveItems, ...restById.values()].sort(byActivityDesc);
 }
