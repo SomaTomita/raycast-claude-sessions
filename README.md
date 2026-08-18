@@ -1,5 +1,11 @@
 # Claude Code Sessions (Raycast)
 
+[![Raycast](https://img.shields.io/badge/Raycast-extension-FF6363?logo=raycast&logoColor=white)](https://raycast.com)
+[![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white)](https://www.apple.com/macos/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![License](https://img.shields.io/github/license/SomaTomita/raycast-claude-sessions)](LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/SomaTomita/raycast-claude-sessions)](https://github.com/SomaTomita/raycast-claude-sessions/commits/main)
+
 One Raycast command that answers two questions: **what is every Claude Code session doing right now**, and
 **what did I work on before**.
 
