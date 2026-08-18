@@ -34,8 +34,9 @@ const PID_FILE = /^(\d+)\.json$/;
 const hostCache = new Map<number, HostInfo>();
 
 async function resolveHosts(pids: readonly number[]): Promise<Map<number, HostInfo>> {
+  const wanted = new Set(pids);
   for (const pid of hostCache.keys()) {
-    if (!pids.includes(pid)) {
+    if (!wanted.has(pid)) {
       hostCache.delete(pid);
     }
   }

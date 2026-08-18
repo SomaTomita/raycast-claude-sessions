@@ -1,6 +1,6 @@
 import { Color, getPreferenceValues, Icon, List } from "@raycast/api";
 import { showFailureToast, useCachedPromise } from "@raycast/utils";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { SessionActions } from "./components/session-actions";
 import { SessionDetail } from "./components/session-detail";
@@ -21,6 +21,10 @@ const DEFAULT_HISTORY_LIMIT = 80;
 const MAX_HISTORY_LIMIT = 500;
 /** Turns shown in the detail pane. Only the selected session is read. */
 const PREVIEW_TURNS = 10;
+
+/** Hoisted so every row shares one identity instead of allocating a fresh empty array. */
+const NO_MESSAGES: readonly TranscriptMessage[] = [];
+const NO_SIBLINGS: readonly SessionItem[] = [];
 
 interface Preferences {
   readonly terminalApp?: TerminalApp;
@@ -193,19 +197,48 @@ export default function Command() {
     return data;
   }, [data, filter]);
 
-  const liveCount = data.filter((item) => item.live !== null).length;
+  /**
+   * One pass over every session: its display group, the live count, and unreachable rows grouped
+   * by directory. Rendering used to re-derive the group per section, so `isUnreachable` ran once
+   * per item per section.
+   */
+  const { groupByKey, unreachableByCwd, liveCount } = useMemo(() => {
+    const groups = new Map<string, SessionGroup>();
+    const byCwd = new Map<string, SessionItem[]>();
+    let live = 0;
 
-  /** Unreachable sessions grouped by directory, so one action can bring a whole project back. */
-  const unreachableByCwd = useMemo(() => {
-    const map = new Map<string, SessionItem[]>();
     for (const item of data) {
-      if (!isUnreachable(item, openRoots)) {
-        continue;
+      if (item.live !== null) {
+        live += 1;
       }
-      map.set(item.cwd, [...(map.get(item.cwd) ?? []), item]);
+      const group: SessionGroup = isUnreachable(item, openRoots) ? "unreachable" : item.state;
+      groups.set(item.key, group);
+      if (group === "unreachable") {
+        const bucket = byCwd.get(item.cwd);
+        if (bucket === undefined) {
+          byCwd.set(item.cwd, [item]);
+        } else {
+          bucket.push(item);
+        }
+      }
+    }
+
+    return { groupByKey: groups, unreachableByCwd: byCwd, liveCount: live };
+  }, [data, openRoots]);
+
+  const sections = useMemo(() => {
+    const map = new Map<SessionGroup, SessionItem[]>();
+    for (const item of visible) {
+      const group = groupByKey.get(item.key) ?? item.state;
+      const bucket = map.get(group);
+      if (bucket === undefined) {
+        map.set(group, [item]);
+      } else {
+        bucket.push(item);
+      }
     }
     return map;
-  }, [data, openRoots]);
+  }, [visible, groupByKey]);
 
   const selectedPath = useMemo(
     () => data.find((item) => item.key === selectedKey)?.transcript?.path ?? "",
@@ -214,9 +247,18 @@ export default function Command() {
 
   const { data: messages, isLoading: isLoadingMessages } = useCachedPromise(loadMessages, [selectedPath], {
     keepPreviousData: false,
-    initialData: [] as TranscriptMessage[],
+    initialData: NO_MESSAGES as TranscriptMessage[],
     execute: showDetail && selectedPath.length > 0,
   });
+
+  const handleRefresh = useCallback(() => {
+    invalidateAgents();
+    revalidate();
+    revalidateLive();
+    revalidateWindows();
+  }, [revalidate, revalidateLive, revalidateWindows]);
+
+  const handleToggleDetail = useCallback(() => setShowDetail((current) => !current), []);
 
   return (
     <List
@@ -242,8 +284,8 @@ export default function Command() {
         description="Sessions are read from ~/.claude/sessions and ~/.claude/projects."
       />
       {SECTION_ORDER.map((group) => {
-        const items = visible.filter((item) => (isUnreachable(item, openRoots) ? "unreachable" : item.state) === group);
-        if (items.length === 0) {
+        const items = sections.get(group);
+        if (items === undefined || items.length === 0) {
           return null;
         }
         return (
@@ -260,7 +302,7 @@ export default function Command() {
                 detail={
                   <SessionDetail
                     item={item}
-                    messages={item.key === selectedKey ? messages : []}
+                    messages={item.key === selectedKey ? messages : NO_MESSAGES}
                     isLoadingMessages={item.key === selectedKey && isLoadingMessages}
                   />
                 }
@@ -274,16 +316,11 @@ export default function Command() {
                     background={group === "background"}
                     siblings={
                       group === "unreachable"
-                        ? (unreachableByCwd.get(item.cwd) ?? []).filter((other) => other.key !== item.key)
-                        : []
+                        ? (unreachableByCwd.get(item.cwd) ?? NO_SIBLINGS).filter((other) => other.key !== item.key)
+                        : NO_SIBLINGS
                     }
-                    onRefresh={() => {
-                      invalidateAgents();
-                      revalidate();
-                      revalidateLive();
-                      revalidateWindows();
-                    }}
-                    onToggleDetail={() => setShowDetail((current) => !current)}
+                    onRefresh={handleRefresh}
+                    onToggleDetail={handleToggleDetail}
                   />
                 }
               />

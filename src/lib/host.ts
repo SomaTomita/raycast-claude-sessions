@@ -39,6 +39,8 @@ const HOST_KINDS: Record<string, HostKind> = {
 const BARE_TERMINALS = /^(alacritty|ghostty|kitty|wezterm(-gui)?)$/i;
 
 const MAX_CHAIN_DEPTH = 16;
+/** Hoisted: this splits every line of a ~1000 row process table. */
+const COLUMN_SEPARATOR = /\s+/;
 
 /** Snapshot of the process table, keyed by pid. One `ps` call serves every session. */
 export async function readProcessTable(): Promise<Map<number, ProcessRow>> {
@@ -51,7 +53,7 @@ export async function readProcessTable(): Promise<Map<number, ProcessRow>> {
   }
 
   for (const line of stdout.split("\n")) {
-    const parts = line.trim().split(/\s+/);
+    const parts = line.trim().split(COLUMN_SEPARATOR);
     if (parts.length < 4) {
       continue;
     }

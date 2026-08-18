@@ -158,23 +158,29 @@ export async function loadSessions(historyLimit: number, claudeBin?: string): Pr
  * without rescanning transcripts. Unchanged rows keep their object identity.
  */
 export function applyLiveSessions(items: readonly SessionItem[], live: readonly LiveSession[]): SessionItem[] {
+  // One pass: transcript context per session, and the previous row per pid for identity reuse.
   const contexts = new Map<string, SessionContext>();
+  const itemsByPid = new Map<number, SessionItem>();
   for (const item of items) {
     if (!contexts.has(item.sessionId)) {
       contexts.set(item.sessionId, contextOf(item));
     }
+    if (item.live !== null) {
+      itemsByPid.set(item.live.pid, item);
+    }
   }
 
   const liveIds = new Set(live.map((session) => session.sessionId));
+
   const liveItems = live.map((session) => {
-    const unchanged = items.find(
-      (item) =>
-        item.live !== null &&
-        item.live.pid === session.pid &&
-        item.live.status === session.status &&
-        item.live.waitingFor === session.waitingFor,
-    );
-    if (unchanged !== undefined && unchanged.sessionId === session.sessionId) {
+    const previous = itemsByPid.get(session.pid);
+    const unchanged =
+      previous?.live?.status === session.status &&
+      previous?.live?.waitingFor === session.waitingFor &&
+      previous?.sessionId === session.sessionId
+        ? previous
+        : undefined;
+    if (unchanged !== undefined) {
       return unchanged;
     }
     const context = contexts.get(session.sessionId) ?? { transcript: null, lastPrompt: null, agent: null };
