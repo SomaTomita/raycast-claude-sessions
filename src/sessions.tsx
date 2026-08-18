@@ -50,7 +50,7 @@ const SECTION_ORDER: readonly SessionGroup[] = ["working", "waiting", "unreachab
 const WINDOW_REFRESH_MS = 15_000;
 
 interface OpenProjects {
-  /** Project roots per editor process, from window titles, e.g. `{ zed: ["migration"] }`. */
+  /** Project roots per editor process, from window titles, e.g. `{ zed: ["api", "web"] }`. */
   readonly roots: Record<string, string[]>;
   /** Absolute paths Zed has open, including workspaces that share a window with another project. */
   readonly zedPaths: string[];

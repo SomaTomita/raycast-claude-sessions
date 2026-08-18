@@ -77,7 +77,7 @@ export async function listProjectRoots(processName: string): Promise<Set<string>
   return new Set((await listWindowTitles(processName)).flatMap(rootsOf));
 }
 
-/** Project roots a window title claims, e.g. `migration, repro-audit — file.png` -> both names. */
+/** Project roots a window title claims, e.g. `api, web — main.ts` -> both names. */
 function rootsOf(title: string): string[] {
   const projectPart = title.split(TITLE_SEPARATOR)[0] ?? "";
   return projectPart
