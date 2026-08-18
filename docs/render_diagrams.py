@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    uv run --with diagrams --python 3.12 docs/diagrams.py
+    uv run --with diagrams --python 3.12 docs/render_diagrams.py
 
 Requires Graphviz (`brew install graphviz`).
 """
@@ -14,18 +14,35 @@ from diagrams.programming.flowchart import Action, Database, Decision, Document,
 from diagrams.programming.framework import React
 from diagrams.programming.language import Typescript
 
-GRAPH_ATTR = {
-    "fontsize": "16",
-    "bgcolor": "transparent",
-    "pad": "0.4",
-    "splines": "spline",
-}
-NODE_ATTR = {"fontsize": "12"}
-EDGE_ATTR = {"fontsize": "11"}
+INK = "#1F2328"
+BLUE = "#2F6FB3"
+ORANGE = "#C4622D"
+GREY = "#8B949E"
 
-READ = Edge(color="#4A7DBE")
-WRITE = Edge(color="#D97757")
-POLL = Edge(color="#4A7DBE", style="dashed")
+# A solid background: GitHub shows these images unchanged, and dark ink on a transparent
+# background is unreadable in dark mode.
+GRAPH_ATTR = {
+    "bgcolor": "#FFFFFF",
+    "fontcolor": INK,
+    "fontname": "Helvetica",
+    "fontsize": "15",
+    "pad": "0.3",
+    "nodesep": "0.35",
+    "ranksep": "0.7",
+}
+NODE_ATTR = {"fontcolor": INK, "fontname": "Helvetica", "fontsize": "11"}
+EDGE_ATTR = {"fontcolor": INK, "fontname": "Helvetica", "fontsize": "10"}
+
+READ = Edge(color=BLUE)
+WRITE = Edge(color=ORANGE)
+
+
+def yes(label: str = "yes") -> Edge:
+    return Edge(label=label, color=BLUE, fontcolor=INK)
+
+
+def no(label: str = "no") -> Edge:
+    return Edge(label=label, color=ORANGE, fontcolor=INK)
 
 
 def architecture() -> None:
@@ -34,7 +51,7 @@ def architecture() -> None:
         filename="docs/architecture",
         show=False,
         direction="LR",
-        graph_attr=GRAPH_ATTR,
+        graph_attr={**GRAPH_ATTR, "splines": "spline"},
         node_attr=NODE_ATTR,
         edge_attr=EDGE_ATTR,
     ):
@@ -58,84 +75,104 @@ def architecture() -> None:
 
         with Cluster("Action layer"):
             goto = Typescript("goto.ts")
-            windows = Typescript("windows.ts / focus.ts\n15s window scan")
-            activate = Typescript("activate.ts\nJXA / pid")
+            windows = Typescript("windows.ts / focus.ts\nWindow menu, 15s")
+            activate = Typescript("activate.ts\nJXA, by pid")
             resume = Typescript("resume.ts")
 
         with Cluster("Targets"):
-            iterm = Client("iTerm2 tab\n(tty match)")
-            editor = Client("Zed window\n(AXRaise)")
+            iterm = Client("iTerm2 tab")
+            editor = Client("Zed window")
 
         registry_file >> READ >> registry
         cli >> READ >> agents
         transcripts >> READ >> transcript
         prompt_log >> READ >> prompts
-        registry >> Edge(color="#4A7DBE", label="ps parent chain") >> host
+        registry >> Edge(color=BLUE, label="ps parent chain") >> host
 
-        agents >> READ >> merge
-        registry >> READ >> merge
-        transcript >> READ >> merge
-        prompts >> READ >> merge
-        host >> READ >> merge
+        for reader in (registry, agents, transcript, prompts, host):
+            reader >> READ >> merge
 
-        merge >> Edge(color="#4A7DBE", label="30s / ⌘R") >> list_view
+        merge >> Edge(color=BLUE, label="30s / ⌘R") >> list_view
         list_view >> READ >> detail
         list_view >> WRITE >> goto
+
         goto >> WRITE >> windows
         goto >> WRITE >> activate
-        goto >> Edge(color="#D97757", label="no host left") >> resume
+        goto >> Edge(color=ORANGE, label="nothing hosts it") >> resume
 
         windows >> WRITE >> editor
         activate >> WRITE >> editor
-        resume >> Edge(color="#D97757", label="write text") >> iterm
+        resume >> Edge(color=ORANGE, label="write text") >> iterm
 
 
-def go_to_session() -> None:
-    """Mirrors goToSession() in src/lib/goto.ts and the resume path in session-actions.tsx."""
+def reaching_a_live_session() -> None:
+    """↩ on a row whose process is alive. See goToSession() in src/lib/goto.ts."""
     with Diagram(
-        "Go to Session",
-        filename="docs/go-to-session",
+        "↩ · reaching a live session",
+        filename="docs/flow-live",
         show=False,
         direction="LR",
-        graph_attr={**GRAPH_ATTR, "ranksep": "1.0", "nodesep": "0.5"},
+        graph_attr=GRAPH_ATTR,
         node_attr=NODE_ATTR,
         edge_attr=EDGE_ATTR,
     ):
-        start = StartEnd("↩ on a row")
-        is_background = Decision("background\nagent?")
-        is_live = Decision("live\nprocess?")
-        window_gone = Decision("editor window\ngone?")
-        host_kind = Decision("host kind?")
-        has_stale = Decision("stale process\nholds it?")
+        start = StartEnd("live session")
+        host_kind = Decision("what hosts it?")
+        activate = Action("activate the host pid\n(never launches)")
 
-        copy_attach = Action("copy\nclaude attach <id>")
-        tab = Action("select the tab\nwhose tty matches")
-        raise_window = Action("AXRaise\nthat window")
-        activate = Action("activate host pid\n(never launches)")
-        sigterm = Action("SIGTERM,\nthen resume")
-        resume = Action("resume in iTerm2 tabs\n(⌘⇧↩ for the whole project)")
+        with Cluster("scriptable terminal"):
+            tab = Action("select the tab\nwhose tty matches")
 
-        start >> is_background
-        is_background >> Edge(label="yes", color="#D97757") >> copy_attach
-        is_background >> Edge(label="no", color="#4A7DBE") >> is_live
+        with Cluster("editor"):
+            window = Decision("a window or workspace\nholds this directory?")
+            switch = Action("switch to it via\nthe Window menu")
 
-        is_live >> Edge(label="no", color="#D97757") >> resume
-        is_live >> Edge(label="yes", color="#4A7DBE") >> window_gone
+        start >> Edge(color=BLUE) >> host_kind
+        host_kind >> Edge(label="iTerm2 / Terminal", color=BLUE, fontcolor=INK) >> tab
+        host_kind >> Edge(label="Zed / VS Code", color=BLUE, fontcolor=INK) >> window
+        host_kind >> Edge(label="anything else", color=GREY, fontcolor=INK) >> activate
+        window >> yes() >> switch
+        window >> no() >> activate
 
-        window_gone >> Edge(label="yes", color="#D97757") >> has_stale
-        window_gone >> Edge(label="no", color="#4A7DBE") >> host_kind
 
-        nothing = StartEnd("nothing happens")
-        has_stale >> Edge(label="confirm", color="#D97757") >> sigterm
-        has_stale >> Edge(label="cancel", color="#9AA0A6") >> nothing
-        sigterm >> WRITE >> resume
+def resuming_a_session() -> None:
+    """↩ on a row nothing can reach. See the resume path in components/session-actions.tsx."""
+    with Diagram(
+        "↩ · nothing hosts it",
+        filename="docs/flow-resume",
+        show=False,
+        direction="LR",
+        graph_attr=GRAPH_ATTR,
+        node_attr=NODE_ATTR,
+        edge_attr=EDGE_ATTR,
+    ):
+        resume = Action("claude --resume in iTerm2\n(⌘⇧↩ for every session\nof the project)")
 
-        host_kind >> Edge(label="iTerm2 / Terminal", color="#4A7DBE") >> tab
-        host_kind >> Edge(label="editor: window\nshows the cwd", color="#4A7DBE") >> raise_window
-        host_kind >> Edge(label="editor: no match,\nor other app", color="#4A7DBE") >> activate
+        with Cluster("history row"):
+            history = StartEnd("no process,\nonly a transcript")
+
+        with Cluster("window gone row"):
+            gone = StartEnd("process alive,\nnowhere to jump")
+            stale = Decision("quit the process\nholding it?")
+            sigterm = Action("SIGTERM first:\none writer\nper transcript")
+            nothing = StartEnd("nothing happens")
+
+        with Cluster("background agent row"):
+            background = StartEnd("claude --bg job")
+            attach = Action("copy\nclaude attach <id>")
+
+        history >> Edge(color=ORANGE) >> resume
+
+        gone >> Edge(color=ORANGE) >> stale
+        stale >> yes("confirm") >> sigterm
+        stale >> Edge(label="cancel", color=GREY, fontcolor=INK) >> nothing
+        sigterm >> Edge(color=ORANGE) >> resume
+
+        background >> Edge(color=GREY) >> attach
 
 
 if __name__ == "__main__":
     architecture()
-    go_to_session()
-    print("wrote docs/architecture.png and docs/go-to-session.png")
+    reaching_a_live_session()
+    resuming_a_session()
+    print("wrote docs/architecture.png, docs/flow-live.png, docs/flow-resume.png")

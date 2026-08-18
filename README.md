@@ -67,7 +67,7 @@ then does the most precise thing available:
 | Anything else (Warp, Ghostty, …) | Activates the exact hosting process. Any app bundle in the parent chain counts, so an unlisted terminal still works. |
 | Nothing (history, or window gone) | Resumes in the terminal application: one iTerm2 window with a tab per session. |
 
-![Go to Session](docs/go-to-session.png)
+![Reaching a live session](docs/flow-live.png)
 
 Activation goes through `NSRunningApplication` (JXA), not `tell application "X" to activate`: it targets
 the host **pid**, so it never launches an app that has exited, tells two instances of one bundle apart, and
@@ -107,6 +107,8 @@ that follows lands in whatever has focus. Zed exposes no scripting API, so the t
 Terminals are scriptable, so resuming uses them directly: iTerm2 gets `create tab with default profile` plus
 `write text` per session, Terminal.app gets one `do script` window per session. No keystrokes, no layout
 dependency, and several sessions can come back at once.
+
+![Resuming a session](docs/flow-resume.png)
 
 ## Layout
 
