@@ -9,6 +9,17 @@
 One Raycast command that answers two questions: **what is every Claude Code session doing right now**, and
 **what did I work on before**.
 
+## Architecture
+
+![Architecture](docs/architecture.png)
+
+Read paths are blue, actions orange. Everything on the left is read-only; nothing is ever written to
+`~/.claude`. Diagrams are generated with [mingrammer/diagrams](https://github.com/mingrammer/diagrams):
+
+```sh
+uv run --with diagrams --python 3.12 docs/render_diagrams.py   # needs graphviz
+```
+
 ## Where the data comes from
 
 Everything is read-only, straight off disk. No API, no credentials, no hooks, no changes to `settings.json`.
@@ -55,6 +66,8 @@ then does the most precise thing available:
 | Zed / VS Code / Cursor | Raises the window already showing that directory (matched by folder name through the accessibility API). It never opens, launches, or replaces anything. Terminal tabs inside an editor cannot be targeted: no scripting API. |
 | Anything else (Warp, Ghostty, …) | Activates the exact hosting process. Any app bundle in the parent chain counts, so an unlisted terminal still works. |
 | Nothing (history, or window gone) | Resumes in the terminal application: one iTerm2 window with a tab per session. |
+
+![Go to Session](docs/go-to-session.png)
 
 Activation goes through `NSRunningApplication` (JXA), not `tell application "X" to activate`: it targets
 the host **pid**, so it never launches an app that has exited, tells two instances of one bundle apart, and
