@@ -1,6 +1,7 @@
 import { activateProcess } from "./activate";
 import { focusItermTab, focusTerminalTab, raiseProjectWindow } from "./focus";
 import { SessionItem } from "./sessions";
+import { isInsideOpenProject, readOpenZedProjects } from "./zed-workspaces";
 
 export interface GoToOptions {
   /** Set for a session whose process is alive but whose editor window is gone: it cannot be reached. */
@@ -44,7 +45,7 @@ export async function goToSession(item: SessionItem, options: GoToOptions = {}):
   }
 
   if (live.hostKind === "editor" && live.hostApp.length > 0) {
-    const raised = await raiseProjectWindow(live.hostApp, item.cwd);
+    const raised = await raiseProjectWindow(live.hostApp, item.cwd, live.hostPid);
     if (raised) {
       return {
         kind: "reached",
@@ -52,7 +53,13 @@ export async function goToSession(item: SessionItem, options: GoToOptions = {}):
         message: `${live.name} · ${live.tty || "unknown tty"}`,
       };
     }
-    return activateHost(live.hostPid, live.hostApp, "No window shows this directory; nothing was opened");
+
+    // The window list can miss a project that is open as a second workspace inside another window.
+    const openProjects = live.hostApp === "Zed" ? await readOpenZedProjects() : [];
+    const message = isInsideOpenProject(item.cwd, openProjects)
+      ? "Open as a workspace inside another window; switch to it there"
+      : "No window shows this directory; nothing was opened";
+    return activateHost(live.hostPid, live.hostApp, message);
   }
 
   if (live.hostPid > 0) {

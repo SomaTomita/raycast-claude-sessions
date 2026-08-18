@@ -63,7 +63,7 @@ then does the most precise thing available:
 | --- | --- |
 | iTerm2 | Selects the exact tab whose `tty` matches the Claude process. Verified against a running session. |
 | Terminal.app | Same approach via Terminal's `tty` property on tabs. |
-| Zed / VS Code / Cursor | Raises the window already showing that directory (matched by folder name through the accessibility API). It never opens, launches, or replaces anything. Terminal tabs inside an editor cannot be targeted: no scripting API. |
+| Zed / VS Code / Cursor | Switches to the window already showing that directory, through the application's own **Window menu**, so it works even when the window lives on another Space. It never opens, launches, or replaces anything. Terminal tabs inside an editor cannot be targeted: no scripting API. |
 | Anything else (Warp, Ghostty, …) | Activates the exact hosting process. Any app bundle in the parent chain counts, so an unlisted terminal still works. |
 | Nothing (history, or window gone) | Resumes in the terminal application: one iTerm2 window with a tab per session. |
 
@@ -73,8 +73,20 @@ Activation goes through `NSRunningApplication` (JXA), not `tell application "X" 
 the host **pid**, so it never launches an app that has exited, tells two instances of one bundle apart, and
 switches Spaces including fullscreen.
 
-Listing an editor's windows uses `System Events`, so macOS asks once for **Accessibility permission for
-Raycast**. Without it no window is ever matched, and sessions hosted in an editor fall back to activating the app.
+### Finding an editor's windows
+
+`windows of process` through the accessibility API only reports windows on the **current Space**: with one
+window per desktop it returns one entry out of six, which made live sessions look stranded. The window list is
+therefore read from the application's Window menu, which lists every window regardless of Space, and switching
+is a click on that menu entry.
+
+Zed can also hold several projects in one window, where only the active one appears in any title. So a project
+also counts as open when Zed's own state database lists it (`~/Library/Application Support/Zed/db/*/db.sqlite`,
+read-only, `workspaces` rows that still have a `window_id`). That database is another application's
+implementation detail, so every failure path is silent and an unreadable state means "unknown", never "closed".
+
+Both paths use `System Events`, so macOS asks once for **Accessibility permission for Raycast**. Without it no
+window is ever matched, and sessions hosted in an editor fall back to activating the app.
 
 ### Never disturb an open workspace
 

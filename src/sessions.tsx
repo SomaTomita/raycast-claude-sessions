@@ -12,6 +12,7 @@ import { TerminalApp } from "./lib/resume";
 import { invalidateAgents } from "./lib/agents";
 import { applyLiveSessions, loadSessions, SessionItem, SessionState } from "./lib/sessions";
 import { listProjectRoots } from "./lib/windows";
+import { isInsideOpenProject, readOpenZedProjects } from "./lib/zed-workspaces";
 
 /** The registry is a handful of tiny files, so live status can be polled aggressively. */
 const LIVE_REFRESH_MS = 3_000;
@@ -48,26 +49,37 @@ const SECTION_ORDER: readonly SessionGroup[] = ["working", "waiting", "unreachab
 /** Window titles change rarely, and each check is an accessibility round trip. */
 const WINDOW_REFRESH_MS = 15_000;
 
-/** Project roots currently open per editor process, e.g. `{ zed: ["migration", "repro-audit"] }`. */
-async function loadOpenRoots(processList: string): Promise<Record<string, string[]>> {
+interface OpenProjects {
+  /** Project roots per editor process, from window titles, e.g. `{ zed: ["migration"] }`. */
+  readonly roots: Record<string, string[]>;
+  /** Absolute paths Zed has open, including workspaces that share a window with another project. */
+  readonly zedPaths: string[];
+}
+
+async function loadOpenProjects(processList: string): Promise<OpenProjects> {
   const processes = processList.split(",").filter((name) => name.length > 0);
-  const entries = await Promise.all(
-    processes.map(async (name): Promise<[string, string[]]> => [name, [...(await listProjectRoots(name))]]),
-  );
-  return Object.fromEntries(entries);
+  const [entries, zedPaths] = await Promise.all([
+    Promise.all(processes.map(async (name): Promise<[string, string[]]> => [name, [...(await listProjectRoots(name))]])),
+    processes.includes("zed") ? readOpenZedProjects() : Promise.resolve([]),
+  ]);
+  return { roots: Object.fromEntries(entries), zedPaths };
 }
 
 /**
- * True when a live editor-hosted session has no window showing its directory.
- * An empty root list means the lookup failed (no accessibility permission, say), so nothing is
- * flagged: a false "window gone" is worse than missing one.
+ * True when a live editor-hosted session has nowhere to jump to: no window shows its directory and
+ * the editor does not report it as an open project either.
+ * An empty lookup means the state could not be read, so nothing is flagged: a false "window gone"
+ * is worse than a missing one.
  */
-function isUnreachable(item: SessionItem, openRoots: Record<string, string[]>): boolean {
+function isUnreachable(item: SessionItem, open: OpenProjects): boolean {
   const live = item.live;
   if (live === null || live.hostKind !== "editor") {
     return false;
   }
-  const roots = openRoots[editorProcessName(live.hostApp)];
+  if (isInsideOpenProject(item.cwd, open.zedPaths)) {
+    return false;
+  }
+  const roots = open.roots[editorProcessName(live.hostApp)];
   if (roots === undefined || roots.length === 0) {
     return false;
   }
@@ -164,9 +176,9 @@ export default function Command() {
     [live],
   );
 
-  const { data: openRoots, revalidate: revalidateWindows } = useCachedPromise(loadOpenRoots, [editorProcesses], {
+  const { data: openProjects, revalidate: revalidateWindows } = useCachedPromise(loadOpenProjects, [editorProcesses], {
     keepPreviousData: true,
-    initialData: {} as Record<string, string[]>,
+    initialData: { roots: {}, zedPaths: [] } as OpenProjects,
     execute: editorProcesses.length > 0,
   });
 
@@ -207,7 +219,7 @@ export default function Command() {
   const unreachableByCwd = useMemo(() => {
     const byCwd = new Map<string, SessionItem[]>();
     for (const item of data) {
-      if (!isUnreachable(item, openRoots)) {
+      if (!isUnreachable(item, openProjects)) {
         continue;
       }
       const bucket = byCwd.get(item.cwd);
@@ -218,13 +230,13 @@ export default function Command() {
       }
     }
     return byCwd;
-  }, [data, openRoots]);
+  }, [data, openProjects]);
 
   /** Rows bucketed by the section they render in, in one pass over what the filter left. */
   const sections = useMemo(() => {
     const bySection = new Map<SessionGroup, SessionItem[]>();
     for (const item of visible) {
-      const group: SessionGroup = isUnreachable(item, openRoots) ? "unreachable" : item.state;
+      const group: SessionGroup = isUnreachable(item, openProjects) ? "unreachable" : item.state;
       const bucket = bySection.get(group);
       if (bucket === undefined) {
         bySection.set(group, [item]);
@@ -233,7 +245,7 @@ export default function Command() {
       }
     }
     return bySection;
-  }, [visible, openRoots]);
+  }, [visible, openProjects]);
 
   const selectedPath = useMemo(
     () => data.find((item) => item.key === selectedKey)?.transcript?.path ?? "",

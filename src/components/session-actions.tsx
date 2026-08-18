@@ -105,7 +105,7 @@ export function SessionActions({
 
   async function openEditor() {
     try {
-      const reused = await revealProject(editor, item.cwd);
+      const reused = await revealProject(editor, item.cwd, item.live?.hostPid ?? 0);
       if (!reused) {
         await showToast({
           style: Toast.Style.Success,

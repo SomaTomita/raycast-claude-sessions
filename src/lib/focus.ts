@@ -47,15 +47,15 @@ end tell`);
  * Raises the window already showing `cwd`, and only opens a new window when there is none.
  * Returns true when an existing window was reused.
  */
-export async function revealProject(appName: string, cwd: string): Promise<boolean> {
-  if (await focusProjectWindow(appName, editorProcessName(appName), cwd)) {
+export async function revealProject(appName: string, cwd: string, hostPid = 0): Promise<boolean> {
+  if (await focusProjectWindow(appName, editorProcessName(appName), cwd, hostPid)) {
     return true;
   }
   await openProjectInNewWindow(appName, cwd);
   return false;
 }
 
-/** Raises the window for `cwd` if it exists. Never opens, launches, or replaces anything. */
-export async function raiseProjectWindow(appName: string, cwd: string): Promise<boolean> {
-  return focusProjectWindow(appName, editorProcessName(appName), cwd);
+/** Switches to the window for `cwd` if it exists. Never opens, launches, or replaces anything. */
+export async function raiseProjectWindow(appName: string, cwd: string, hostPid: number): Promise<boolean> {
+  return focusProjectWindow(appName, editorProcessName(appName), cwd, hostPid);
 }
